@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RestauranteFinder Angola</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:Arial,sans-serif; background:#f5f5f5; }
+header { background:#e65100; color:white; padding:15px; text-align:center; }
+header h1 { font-size:22px; }
+header p { font-size:13px; opacity:0.9; }
+#controls { padding:15px; }
+#btn-localizar { width:100%; background:#e65100; color:white; border:none; padding:14px; border-radius:10px; font-size:16px; cursor:pointer; }
+#status { margin:10px 0; font-size:14px; color:#555; text-align:center; }
+#map { width:100%; height:60vh; }
+#info-panel { display:none; position:fixed; bottom:0; left:0; right:0; background:white; border-radius:20px 20px 0 0; padding:20px; box-shadow:0 -4px 20px rgba(0,0,0,0.2); z-index:1000; }
+#info-panel h2 { font-size:18px; color:#e65100; }
+#info-panel p { margin:5px 0; font-size:14px; color:#555; }
+#btn-fechar { position:absolute; top:15px; right:15px; background:none; border:none; font-size:20px; cursor:pointer; }
+#distancia-info { background:#fff3e0; border-radius:10px; padding:10px; margin:10px 0; text-align:center; }
+#distancia-info strong { color:#e65100; font-size:18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🍴 RestauranteFinder</h1>
+  <p>Encontre restaurantes próximos a você</p>
+</header>
+<div id="controls">
+  <button id="btn-localizar" onclick="localizarUtilizador()">📍 Encontrar Restaurantes</button>
+  <p id="status">Clique no botão para começar</p>
+</div>
+<div id="map"></div>
+<div id="info-panel">
+  <button id="btn-fechar" onclick="fecharPainel()">✕</button>
+  <h2 id="rest-nome"></h2>
+  <p>🍽️ <span id="rest-categoria"></span></p>
+  <p>🕐 Aberto: <span id="rest-horario"></span></p>
+  <p>📞 <span id="rest-telefone"></span></p>
+  <div id="distancia-info">
+    <strong id="rest-distancia"></strong><br>
+    <span id="rest-tempo"></span>
+  </div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCARULWqO2lKLo7e7RlH_j7eSF78BxBM_M",
+  authDomain: "restaurantefinder.firebaseapp.com",
+  projectId: "restaurantefinder",
+  storageBucket: "restaurantefinder.firebasestorage.app",
+  messagingSenderId: "713989376155",
+  appId: "1:713989376155:web:5d1dc51a3d2c26e8f31e3e"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+let map = L.map('map').setView([-8.8383, 13.2344], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap'
+}).addTo(map);
+
+let userMarker;
+let restaurantLayer = L.layerGroup().addTo(map);
+
+function calcularDistancia(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2-lat1) * Math.PI/180;
+  const dLon = (lon2-lon1) * Math.PI/180;
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) +
+    Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*
+    Math.sin(dLon/2)*Math.sin(dLon/2);
+  const c = 2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  return R * c;
+}
+
+window.localizarUtilizador = async function() {
+  const status = document.getElementById("status");
+  status.textContent = "A procurar a tua localização...";
+  if (!navigator.geolocation) {
+    status.textContent = "Geolocalização não suportada.";
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+    status.textContent = "A carregar restaurantes...";
+    map.setView([lat, lon], 15);
+    if (userMarker) userMarker.setLatLng([lat, lon]);
+    else userMarker = L.marker([lat, lon]).addTo(map).bindPopup("📍 Você está aqui!").openPopup();
+    restaurantLayer.clearLayers();
+    try {
+      const snap = await getDocs(collection(db, "restaurantes"));
+      if (snap.empty) { status.textContent = "Nenhum restaurante encontrado."; return; }
+      snap.forEach(doc => {
+        const r = doc.data();
+        const rLat = parseFloat(r.lat);
+        const rLon = parseFloat(r.lon);
+        if (!isNaN(rLat) && !isNaN(rLon)) {
+          const dist = calcularDistancia(lat, lon, rLat, rLon);
+          const minutos = Math.round(dist / 5 * 60);
+          const marker = L.marker([rLat, rLon], {
+            icon: L.divIcon({
+              html: '🍴',
+              iconSize: [30, 30],
+              className: ''
+            })
+          });
+          marker.on('click', () => {
+            document.getElementById('rest-nome').textContent = r.nome;
+            document.getElementById('rest-categoria').textContent = r.categoria;
+            document.getElementById('rest-horario').textContent = r.horario_abertura + ' - ' + r.horario_fecho;
+            document.getElementById('rest-telefone').textContent = r.telefone || 'N/A';
+            document.getElementById('rest-distancia').textContent = dist.toFixed(1) + ' km';
+            document.getElementById('rest-tempo').textContent = '⏱️ ' + minutos + ' minutos a pé';
+            document.getElementById('info-panel').style.display = 'block';
+          });
+          restaurantLayer.addLayer(marker);
+        }
+      });
+      status.textContent = "✅ " + snap.size + " restaurante(s) encontrado(s)!";
+    } catch(e) {
+      status.textContent = "Erro: " + e.message;
+    }
+  }, (err) => {
+    status.textContent = "Erro: " + err.message;
+  });
+};
+
+window.fecharPainel = function() {
+  document.getElementById('info-panel').style.display = 'none';
+};
+</script>
+</body>
+</html>
